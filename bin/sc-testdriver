@@ -25,7 +25,7 @@ require 'yaml'
   opt :sc_server_port, "SC Server Port", :short => 'p', :type => :int, :default => (ENV['SC_SERVER_PORT'] || '4020').to_i
   opt :sc_server_host, "SC Server Host", :short => 's', :type => :string, :default => "localhost"
   
-  opt :root_dir, "Root directory", :short => 'r', :type => :string, :default => ".."
+  opt :root_dir, "Root directory", :short => 'r', :type => :string, :default => Dir.pwd
   opt :tests_dir, "Tests directory", :short => 't', :type => :string, :default => "{apps,frameworks}"
   opt :exclude_dir, "Exclude test directory", :short => 'x', :type => :string, :multi => true
   
@@ -50,7 +50,17 @@ FileUtils.mkdir_p @options[:results_dir]
 @browser = case @options[:runner]
 when "capybara" then 
   require 'capybara-runner'
-  CapybaraRunner.new(@options[:driver].to_sym, @app_host)
+  require 'sproutcore'
+  
+  options = {
+    :parent => SC.builtin_project,
+  }
+  
+  project = SC::Project.new(@options[:root_dir], options)
+  
+  service = SC::Rack::Service.new(project)
+  
+  CapybaraRunner.new(@options[:driver].to_sym, service)
 when "selenium-rc" then
   require 'selenium-rc-runner'
   SeleniumRCRunner.new(@app_host, 'localhost', '*safari')
@@ -106,11 +116,14 @@ def save_page_html(file_path)
   }
 end
 
+failed = false
+
 testURLs.each{|url|
   print "visiting #{url[:url]}..." unless @options[:quiet]
   @browser.open(url[:url])
   print "visited\n" unless @options[:quiet]
   print "waiting for tests to finish"
+  $stdout.flush
   start = Time.now
   results = nil
   while Time.now < (start + 300)
@@ -120,9 +133,23 @@ testURLs.each{|url|
     sleep 0.2
   end
   puts "(#{Time.now - start} seconds)"
+  
+  modules = TransformResults.parseResults(results)
+  modules.each do |m|
+    if (m.failures + m.errors) > 0
+      failed = true
+    end
+  end
+  
   save_results_xml(url, results) if @options[:junit]
   save_page_png(url[:results_png_file]) if @options[:image]
   save_page_html(url[:results_html_file]) if @options[:html]
 }
 
 @browser.close
+
+if failed
+  exit 1
+else
+  exit 0
+end
